@@ -47,13 +47,13 @@ class Lista extends Command
     private string $filename_output;
     private string $filename_input;
 
+    private bool $use_cache = true;
+
     /**
      * Proccess CPF
      */
     private function doProccess(string $cpf, object $data): bool
     {
-        $this->line("$this->prefix Processando $cpf");
-
         $_data = [
             'CPF' => $cpf,
         ];
@@ -107,10 +107,6 @@ class Lista extends Command
             }
 
             $_data[$param] = $data->$param;
-        }
-
-        if ($this->option('verbose')) {
-            $this->messages[] = "$this->prefix Processado com sucesso";
         }
 
         // Write CSV Line
@@ -266,24 +262,12 @@ class Lista extends Command
         // Prepare Guzzle Client
         $client = new Client([
             'base_uri' => $API_URL,
-            'timeout' => 14.0,
+            'timeout' => 20.0,
             'headers' => [
                 'Content-Type' => 'application/json',
                 'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
             ],
         ]);
-
-        // Test API Connection
-        try {
-            $response = $client->get('/select/select.php?cpf=30193095068');
-            if ($response->getStatusCode() !== 200) {
-                $this->error('Não foi possível se conectar a API');
-                return Command::FAILURE;
-            }
-        } catch (Exception $e) {
-            $this->error('Não foi possível se conectar a API');
-            return Command::FAILURE;
-        }
 
         // Prepare CSV File
         $this->file_in = fopen($path_in, 'r');
@@ -309,6 +293,21 @@ class Lista extends Command
                 return Command::FAILURE;
             }
         }
+
+        $this->info('Testando conexão com a API...');
+        // Test API Connection
+        try {
+            $response = $client->get('/select/select.php?cpf=30193095068');
+            if ($response->getStatusCode() !== 200) {
+                $this->error('Não foi possível se conectar a API');
+                return Command::FAILURE;
+            }
+        } catch (Exception $e) {
+            $this->error('Não foi possível se conectar a API');
+            return Command::FAILURE;
+        }
+
+        $this->info('Conexão com a API estabelecida com sucesso, iniciando processamento...');
 
         // Write CSV Headers
         fputcsv($this->file_out, self::$API_PARAMS, ';');
@@ -346,28 +345,29 @@ class Lista extends Command
                 continue;
             }
 
-            $hash = sha1($cpf);
+            $cache_tag = 'bot_list.' . sha1($cpf);
             $this->prefix = "[Linha: {$lines}, CPF: {$cpf}]:";
-            $cache_tag = 'BOT:LISTA:' . $hash;
 
-            // if (Cache::has($cache_tag)) {
-            //     $data = Cache::get($cache_tag);
+            if ($this->use_cache) {
+                if (Cache::has($cache_tag)) {
+                    $data = Cache::get($cache_tag);
 
-            //     if ($data !== false || $data !== null) {
-            //         $this->messages[] = "$this->prefix Dados em cache, processando...";
-            //         if (!$this->doProccess($cpf, $data)) {
-            //             return Command::FAILURE;
-            //         }
+                    if ($data !== false || $data !== null) {
+                        $this->messages[] = "$this->prefix Dados em cache, processando...";
+                        if (!$this->doProccess($cpf, $data)) {
+                            return Command::FAILURE;
+                        }
 
-            //         continue;
-            //     } else {
-            //         if (Cache::forget($cache_tag)) {
-            //             $this->messages[] = "$this->prefix Dados em cache inválidos ou corrompidos, cache removido, tentanto via API...";
-            //         } else {
-            //             $this->messages[] = "$this->prefix Dados em cache inválidos ou corrompidos, não foi possível remover do cache, tentanto via API...";
-            //         }
-            //     }
-            // }
+                        continue;
+                    } else {
+                        if (Cache::forget($cache_tag)) {
+                            $this->messages[] = "$this->prefix Dados em cache inválidos ou corrompidos, cache removido, tentanto via API...";
+                        } else {
+                            $this->messages[] = "$this->prefix Dados em cache inválidos ou corrompidos, não foi possível remover do cache, tentanto via API...";
+                        }
+                    }
+                }
+            }
 
             $promises[] = $client->requestAsync('GET', '/select/select.php', [
                 'query' => [
@@ -388,6 +388,9 @@ class Lista extends Command
                 foreach ($responses as $response) {
                     $cpf = $promises_cpf[$response_row];
 
+                    $tmp_lines = ($lines - $threads) + $response_row;
+                    $this->prefix = "[Linha: {$tmp_lines}, CPF: {$cpf}]:";
+
                     if ($response->getStatusCode() !== 200) {
                         $this->messages[] = "$this->prefix Não pode ser processado, o servidor retornou um erro, (CODE: {$response->getStatusCode()}), pulando...";
                         $response_row++;
@@ -397,7 +400,6 @@ class Lista extends Command
                     $body = $response->getBody()->getContents();
                     $data = json_decode($body);
 
-
                     if (json_last_error() !== JSON_ERROR_NONE) {
                         $this->messages[] = "$this->prefix Não pode ser processado, a resposta do servidor não é um JSON válido, pulando...";
                         $response_row++;
@@ -405,7 +407,7 @@ class Lista extends Command
                     }
 
                     if ($data === false) {
-                        $this->messages[] = "$this->prefix CPF não é valido, pulando...";
+                        $this->messages[] = "$this->prefix Não pode ser processado, a api não retornou dados, pulando...";
                         $response_row++;
                         continue;
                     }
@@ -420,13 +422,15 @@ class Lista extends Command
                         return Command::FAILURE;
                     }
 
-                    // if (Cache::forever($cache_tag, $data)) {
-                    //     $this->messages[] = "$this->prefix Processado e salvo no cache...";
-                    // } else {
-                    //     $this->messages[] = "$this->prefix Processado mas não foi possível salvar no cache...";
-                    // }
-
-                    $this->messages[] = "$this->prefix Processado...";
+                    if ($this->use_cache) {
+                        if (Cache::forever($cache_tag, $data)) {
+                            $this->messages[] = "$this->prefix Processado e salvo no cache...";
+                        } else {
+                            $this->messages[] = "$this->prefix Processado mas não foi possível salvar no cache...";
+                        }
+                    } else {
+                        $this->messages[] = "$this->prefix Processado...";
+                    }
 
 
                     $response_row++;
