@@ -3,14 +3,12 @@
 namespace App\Console\Commands\BOT;
 
 use GuzzleHttp\Client;
-use GuzzleHttp\Promise\Utils;
 use GuzzleHttp\Exception\ClientException;
 use GuzzleHttp\Cookie\CookieJar;
 use GuzzleHttp\Cookie\SetCookie;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
-use Symfony\Component\Console\Helper\ProgressBar;
 
 class C6 extends Command
 {
@@ -86,7 +84,6 @@ class C6 extends Command
         $promises = [];
 
         $line = 0;
-
         while (($_data = fgetcsv($this->handler_in, 0, ';')) !== false) {
             $line++;
             $this->newLine();

@@ -47,7 +47,7 @@ class Lista extends Command
     private string $filename_output;
     private string $filename_input;
 
-    private bool $use_cache = true;
+    private bool $use_cache = false;
 
     /**
      * Proccess CPF
